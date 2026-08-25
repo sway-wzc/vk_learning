@@ -10,6 +10,7 @@
 #include <vector>
 #include <cstring>
 #include <optional>
+#include <set>
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -202,23 +203,32 @@ private:
 		}
 	}
 	void createLogicalDevice() {
-		QueueFamilyIndices indices = findGraphicsQueueFamilies(physicalDevice);
-		if (indices.isComplete() == false) {//逻辑上不可以为false，因为创建物理设备的时候选择了有图形队列的设备
+		QueueFamilyIndices graphicsIndices = findGraphicsQueueFamilies(physicalDevice);
+		QueueFamilyIndices presentindices = findPresentQueueFamilies(physicalDevice, surface);
+
+		if (graphicsIndices.isComplete() == false|| presentindices.isComplete()==false) {//逻辑上不可以为false，因为创建物理设备的时候选择了有图形队列的设备
 			throw std::runtime_error("failed to find graphics queue family!");
 		}
-		VkDeviceQueueCreateInfo queueCreateInfo{};
-		queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-		queueCreateInfo.queueFamilyIndex = indices.queueFamilyIndex.value();
-		queueCreateInfo.queueCount = 1;
+
+		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+		std::set<uint32_t> uniqueQueueFamilies = { graphicsIndices.queueFamilyIndex.value(), presentindices.queueFamilyIndex.value() };
+
 		float queuePriority = 1.0f;
-		queueCreateInfo.pQueuePriorities = &queuePriority;
+		for (uint32_t queueFamily : uniqueQueueFamilies) {
+			VkDeviceQueueCreateInfo queueCreateInfo{};
+			queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+			queueCreateInfo.queueFamilyIndex = queueFamily;
+			queueCreateInfo.queueCount = 1;
+			queueCreateInfo.pQueuePriorities = &queuePriority;
+			queueCreateInfos.push_back(queueCreateInfo);
+		}
 
 		VkPhysicalDeviceFeatures deviceFeatures{};
 
 		VkDeviceCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-		createInfo.queueCreateInfoCount = 1;
-		createInfo.pQueueCreateInfos = &queueCreateInfo;
+		createInfo.queueCreateInfoCount = queueCreateInfos.size();
+		createInfo.pQueueCreateInfos = queueCreateInfos.data();
 		createInfo.pEnabledFeatures = &deviceFeatures;
 		createInfo.enabledExtensionCount = 0;
 
@@ -226,13 +236,14 @@ private:
 			throw std::runtime_error("failed to create logical device!");
 		}
 
-		vkGetDeviceQueue(device, indices.queueFamilyIndex.value(), 0, &graphicsQueue);
+		vkGetDeviceQueue(device, graphicsIndices.queueFamilyIndex.value(), 0, &graphicsQueue);
+		vkGetDeviceQueue(device, presentindices.queueFamilyIndex.value(), 0, &presentQueue);
 	}
 
 	bool isDeviceSuitable(VkPhysicalDevice device) {
-		QueueFamilyIndices indices = findGraphicsQueueFamilies(device);
-
-		return indices.isComplete();
+		QueueFamilyIndices Graphicsindices = findGraphicsQueueFamilies(device);
+		QueueFamilyIndices presentindices = findPresentQueueFamilies(device,surface);
+		return Graphicsindices.isComplete()&& presentindices.isComplete();
 	}
 
 	void pickPhysicalDevice() {
@@ -338,6 +349,7 @@ private:
 	VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 	VkDevice device;
 	VkQueue graphicsQueue;
+	VkQueue presentQueue;
 	VkSurfaceKHR surface;
 };
 
