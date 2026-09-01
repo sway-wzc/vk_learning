@@ -1,4 +1,10 @@
-float4 main() : SV_TARGET
+struct PSInput
 {
-    return float4(1.0, 0.0, 0.0, 1.0);
+    float4 pos : SV_POSITION;
+    float3 color : COLOR0; // 语义名必须和 VS 输出一致
+};
+
+float4 main(PSInput input) : SV_TARGET
+{
+    return float4(input.color, 1.0);
 }

@@ -24,6 +24,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="shader\build_shaders.bat">
+      <Filter>shader</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="shader\VertexShader.hlsl">

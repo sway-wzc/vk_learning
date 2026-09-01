@@ -139,20 +139,23 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="shader\build_shaders.bat" />
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="shader\PixelShader.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
-    </FxCompile>
-    <FxCompile Include="shader\VertexShader.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Vertex</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Vertex</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Vertex</ShaderType>
-    </FxCompile>
+    <CustomBuild Include="shader\VertexShader.hlsl">
+      <FileType>Document</FileType>
+      <Command>@echo Compiling VertexShader.hlsl ... &amp;&amp; "%VK_SDK_PATH%\Bin\dxc.exe" -spirv -fspv-target-env=vulkan1.0 -T vs_6_0 -E main -Fo "shader\VertexShader.spv" "shader\VertexShader.hlsl"</Command>
+      <Message>Compiling VertexShader.hlsl with dxc</Message>
+      <Outputs>shader\VertexShader.spv</Outputs>
+      <AdditionalInputs>shader\VertexShader.hlsl</AdditionalInputs>
+    </CustomBuild>
+    <CustomBuild Include="shader\PixelShader.hlsl">
+      <FileType>Document</FileType>
+      <Command>@echo Compiling PixelShader.hlsl ... &amp;&amp; "%VK_SDK_PATH%\Bin\dxc.exe" -spirv -fspv-target-env=vulkan1.0 -T ps_6_0 -E main -Fo "shader\PixelShader.spv" "shader\PixelShader.hlsl"</Command>
+      <Message>Compiling PixelShader.hlsl with dxc</Message>
+      <Outputs>shader\PixelShader.spv</Outputs>
+      <AdditionalInputs>shader\PixelShader.hlsl</AdditionalInputs>
+    </CustomBuild>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
