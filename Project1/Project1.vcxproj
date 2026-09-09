@@ -142,19 +142,19 @@
     <None Include="shader\build_shaders.bat" />
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="shader\VertexShader.hlsl">
+    <CustomBuild Include="shader\VertexShader.vert">
       <FileType>Document</FileType>
-      <Command>@echo Compiling VertexShader.hlsl ... &amp;&amp; "%VK_SDK_PATH%\Bin\dxc.exe" -spirv -fspv-target-env=vulkan1.0 -T vs_6_0 -E main -Fo "shader\VertexShader.spv" "shader\VertexShader.hlsl"</Command>
-      <Message>Compiling VertexShader.hlsl with dxc</Message>
+      <Command>@echo Compiling VertexShader.vert ... &amp;&amp; "%VK_SDK_PATH%\Bin\glslangValidator.exe" -V "shader\VertexShader.vert" -o "shader\VertexShader.spv"</Command>
+      <Message>Compiling VertexShader.vert with glslangValidator</Message>
       <Outputs>shader\VertexShader.spv</Outputs>
-      <AdditionalInputs>shader\VertexShader.hlsl</AdditionalInputs>
+      <AdditionalInputs>shader\VertexShader.vert</AdditionalInputs>
     </CustomBuild>
-    <CustomBuild Include="shader\PixelShader.hlsl">
+    <CustomBuild Include="shader\PixelShader.frag">
       <FileType>Document</FileType>
-      <Command>@echo Compiling PixelShader.hlsl ... &amp;&amp; "%VK_SDK_PATH%\Bin\dxc.exe" -spirv -fspv-target-env=vulkan1.0 -T ps_6_0 -E main -Fo "shader\PixelShader.spv" "shader\PixelShader.hlsl"</Command>
-      <Message>Compiling PixelShader.hlsl with dxc</Message>
+      <Command>@echo Compiling PixelShader.frag ... &amp;&amp; "%VK_SDK_PATH%\Bin\glslangValidator.exe" -V "shader\PixelShader.frag" -o "shader\PixelShader.spv"</Command>
+      <Message>Compiling PixelShader.frag with glslangValidator</Message>
       <Outputs>shader\PixelShader.spv</Outputs>
-      <AdditionalInputs>shader\PixelShader.hlsl</AdditionalInputs>
+      <AdditionalInputs>shader\PixelShader.frag</AdditionalInputs>
     </CustomBuild>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

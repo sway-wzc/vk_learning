@@ -269,8 +269,13 @@ private:
 	void initWindow() {
 		glfwInit();
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 		window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+		glfwSetWindowUserPointer(window, this);
+		glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+	}
+	static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+		auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+		app->framebufferResized = true;
 	}
 	void initVulkan() {
 		config.collect();
@@ -289,9 +294,13 @@ private:
 		createSyncObjects();
 	}
 	void createSyncObjects() {
+		// 同步原语跟着"资源"走，不跟着"帧步骤"走：
+		// imageAvailable 的消费端是渲染 submit，由 inFlightFence 保证其已被消费 -> per-frame
 		imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-		renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
 		inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+		// renderFinished 的消费端是 present 引擎，fence 管不到，
+		// 只有"该 image 被重新 acquire"能证明它已空闲 -> per-image
+		renderFinishedSemaphores.resize(swapChainImages.size());
 
 		VkSemaphoreCreateInfo semaphoreInfo{};
 		semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -302,12 +311,13 @@ private:
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 			if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
-				vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
 				vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
 
 				throw std::runtime_error("failed to create synchronization objects for a frame!");
 			}
 		}
+
+		createRenderFinishedSemaphores();
 	}
 	void createCommandBuffer() {
 		commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
@@ -374,6 +384,35 @@ private:
 			throw std::runtime_error("failed to create command pool!");
 		}
 	}
+	// ---------- swapchain 重建 ----------
+
+	// 只销毁"依赖 swapchain 尺寸"的资源；swapChain 本身留给 createSwapChain 当 oldSwapchain
+	void cleanupSwapChain() {
+		for (auto framebuffer : swapChainFramebuffers) {
+			vkDestroyFramebuffer(device, framebuffer, nullptr);
+		}
+		for (auto imageView : swapChainImageViews) {
+			vkDestroyImageView(device, imageView, nullptr);
+		}
+	}
+
+	// renderFinished 是 per-image 的，swapchain 重建后 image 数可能变，需按新数量重建
+	void createRenderFinishedSemaphores() {
+		for (auto semaphore : renderFinishedSemaphores) {
+			vkDestroySemaphore(device, semaphore, nullptr);
+		}
+		renderFinishedSemaphores.clear();
+		renderFinishedSemaphores.resize(swapChainImages.size());
+
+		VkSemaphoreCreateInfo semaphoreInfo{};
+		semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+		for (size_t i = 0; i < renderFinishedSemaphores.size(); i++) {
+			if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS) {
+				throw std::runtime_error("failed to create render finished semaphore!");
+			}
+		}
+	}
+
 	void createFramebuffers() {
 		swapChainFramebuffers.resize(swapChainImages.size());
 		for (size_t i = 0; i < swapChainImages.size(); i++) {
@@ -624,10 +663,17 @@ private:
 		createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 		createInfo.presentMode = presentMode;
 		createInfo.clipped = VK_TRUE;
-		createInfo.oldSwapchain = VK_NULL_HANDLE;
+		// 重建时把旧 swapchain 交给驱动：可复用内部资源并平滑过渡（首次创建时为 VK_NULL_HANDLE）
+		VkSwapchainKHR oldSwapchain = swapChain;
+		createInfo.oldSwapchain = oldSwapchain;
 
 		if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain)) {
 			throw std::runtime_error("failed to create swap chain!");
+		}
+
+		// 新的建好之后再销毁旧的（首次创建时 oldSwapchain 为 VK_NULL_HANDLE，跳过）
+		if (oldSwapchain != VK_NULL_HANDLE) {
+			vkDestroySwapchainKHR(device, oldSwapchain, nullptr);
 		}
 
 		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
@@ -671,7 +717,7 @@ private:
 
 		VkDeviceCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-		createInfo.queueCreateInfoCount = queueCreateInfos.size();
+		createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
 		createInfo.pQueueCreateInfos = queueCreateInfos.data();
 		createInfo.pEnabledFeatures = &deviceFeatures;
 		createInfo.enabledExtensionCount = static_cast<uint32_t>(config.deviceExtensions.size());
@@ -722,12 +768,36 @@ private:
 		}
 		vkDeviceWaitIdle(device);
 	}
+	void recreateSwapChain() {
+		int width = 0, height = 0;
+		glfwGetFramebufferSize(window, &width, &height);
+		while (width == 0 || height == 0) {
+			glfwGetFramebufferSize(window, &width, &height);
+			glfwWaitEvents();
+		}
+
+		vkDeviceWaitIdle(device);
+
+		cleanupSwapChain();
+
+		createSwapChain();
+		createImageViews();
+		createFramebuffers();
+		createRenderFinishedSemaphores(); // per-image semaphore 数量要匹配新的 image 数
+	}
 	void drawFrame() {
 		vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-		vkResetFences(device, 1, &inFlightFences[currentFrame]);
-
+		
 		uint32_t imageIndex;
-		vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+		VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+		if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+			recreateSwapChain();
+			return;
+		}
+		else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+			throw std::runtime_error("failed to acquire swap chain image!");
+		}
+		vkResetFences(device, 1, &inFlightFences[currentFrame]);
 		vkResetCommandBuffer(commandBuffers[currentFrame], 0);
 		recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
@@ -741,7 +811,8 @@ private:
 		submitInfo.pWaitDstStageMask = waitStages;
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
-		VkSemaphore signalSemaphores[] = { renderFinishedSemaphores[currentFrame]};
+		// 按 image 索引：这张图画完的信号，只服务于这张图的 present
+		VkSemaphore signalSemaphores[] = { renderFinishedSemaphores[imageIndex] };
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = signalSemaphores;
 		if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
@@ -757,7 +828,16 @@ private:
 		presentInfo.pSwapchains = swapChains;
 		presentInfo.pImageIndices = &imageIndex;
 
-		vkQueuePresentKHR(presentQueue, &presentInfo);
+		result = vkQueuePresentKHR(presentQueue, &presentInfo);
+
+		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+			framebufferResized = false;
+			recreateSwapChain();
+		}
+		else if (result != VK_SUCCESS) {
+			throw std::runtime_error("failed to present swap chain image!");
+		}
+
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
 
@@ -783,21 +863,24 @@ private:
 
 
 	void cleanup() {
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
-			vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
-			vkDestroyFence(device, inFlightFences[i], nullptr);
+		// 先销毁依赖 swapchain 尺寸的资源（framebuffers / imageViews）
+		cleanupSwapChain();
+
+		// 三个 vector 容量已不再一致，各自按自身容量销毁
+		for (auto semaphore : renderFinishedSemaphores) {
+			vkDestroySemaphore(device, semaphore, nullptr);
+		}
+		for (auto semaphore : imageAvailableSemaphores) {
+			vkDestroySemaphore(device, semaphore, nullptr);
+		}
+		for (auto fence : inFlightFences) {
+			vkDestroyFence(device, fence, nullptr);
 		}
 		vkDestroyCommandPool(device, commandPool, nullptr);
-		for (auto framebuffer : swapChainFramebuffers) {
-			vkDestroyFramebuffer(device, framebuffer, nullptr);
-		}
 		vkDestroyPipeline(device, graphicsPipeline, nullptr);
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 		vkDestroyRenderPass(device, renderPass, nullptr);
-		for (auto imageView : swapChainImageViews) {
-			vkDestroyImageView(device, imageView, nullptr);
-		}
+
 		vkDestroySwapchainKHR(device, swapChain, nullptr);
 		vkDestroyDevice(device, nullptr);
 		if (enableValidationLayers) {
@@ -825,9 +908,9 @@ private:
 			throw std::runtime_error("some layers or instance extensions are not supported!");
 		}
 
-		createInfo.enabledExtensionCount = config.instanceExtensions.size();
+		createInfo.enabledExtensionCount = static_cast<uint32_t>(config.instanceExtensions.size());
 		createInfo.ppEnabledExtensionNames = config.instanceExtensions.data();
-		createInfo.enabledLayerCount = config.layers.size();
+		createInfo.enabledLayerCount = static_cast<uint32_t>(config.layers.size());
 		createInfo.ppEnabledLayerNames = config.layers.data();
 
 		VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo;
@@ -854,7 +937,8 @@ private:
 	uint32_t graphicsFamilyIndex = 0; // 由 createLogicalDevice 查询并缓存
 	uint32_t presentFamilyIndex = 0;
 	VkSurfaceKHR surface;
-	VkSwapchainKHR swapChain;
+	// 必须初始化：createSwapChain 首次调用时会把它当 oldSwapchain 传入
+	VkSwapchainKHR swapChain = VK_NULL_HANDLE;
 	std::vector<VkImage> swapChainImages;
 	std::vector<VkImageView> swapChainImageViews;
 	VkFormat swapChainImageFormat;
@@ -869,6 +953,7 @@ private:
 	std::vector<VkSemaphore> renderFinishedSemaphores;
 	std::vector<VkFence> inFlightFences;
 	uint32_t currentFrame = 0;
+	bool framebufferResized = false;
 };
 
 int main() {
