@@ -24,8 +24,6 @@ struct Vertex {
 	glm::vec3 color;
 	static VkVertexInputBindingDescription getBindingDescription() {
 		VkVertexInputBindingDescription bindingDescription{};
-
-		VkVertexInputBindingDescription bindingDescription{};
 		bindingDescription.binding = 0;
 		bindingDescription.stride = sizeof(Vertex);
 		bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
@@ -51,6 +49,7 @@ const std::vector<Vertex> vertices = {
 	{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
 	{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
 };
+
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -316,6 +315,14 @@ private:
 		auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
 		app->framebufferResized = true;
 		app->lastResizeTime = glfwGetTime(); // 只记录时刻，真正的重建由 drawFrame 的防抖逻辑决定
+
+		// ↓↓↓ 临时验证用，看完删掉 ↓↓↓
+		static double prevTime = 0.0;
+		static int idx = 0;
+		double now = glfwGetTime();
+		std::cout << "[" << idx++ << "] " << width << "x" << height
+			<< "   dt=" << (now - prevTime) * 1000.0 << "ms\n";
+		prevTime = now;
 	}
 	void initVulkan() {
 		config.collect();
@@ -330,8 +337,48 @@ private:
 		createGraphicsPipeline();
 		createFramebuffers();
 		createCommandPool();
+		createVertexBuffer();
 		createCommandBuffer();
 		createSyncObjects();
+	}
+	void createVertexBuffer() {
+		VkBufferCreateInfo bufferInfo{};
+		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bufferInfo.size = sizeof(vertices[0]) * vertices.size();
+		bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		if (vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create vertex buffer!");
+		}
+		VkMemoryRequirements memRequirements;
+		vkGetBufferMemoryRequirements(device, vertexBuffer, &memRequirements);
+
+		VkMemoryAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocInfo.allocationSize = memRequirements.size;
+		allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        if (vkAllocateMemory(device, &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS) {
+            throw std::runtime_error("failed to allocate vertex buffer memory!");
+        }
+
+        vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+
+		void* data;
+		vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &data);
+		memcpy(data, vertices.data(), (size_t)bufferInfo.size);
+		vkUnmapMemory(device, vertexBufferMemory);
+	}
+	uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+		VkPhysicalDeviceMemoryProperties memProperties;
+		vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+			if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+				return i;
+			}
+		}
+		throw std::runtime_error("failed to find suitable memory type!");
 	}
 	void createSyncObjects() {
 		// 同步原语跟着"资源"走，不跟着"帧步骤"走：
@@ -399,6 +446,7 @@ private:
 
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
+
 		VkViewport viewport{};
 		viewport.x = 0.0f;
 		viewport.y = 0.0f;
@@ -413,8 +461,12 @@ private:
 		scissor.extent = swapChainExtent;
 		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
+		VkBuffer vertexBuffers[] = { vertexBuffer };
+		VkDeviceSize offsets[] = { 0 };
+		vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+
 		if (!bDragging) {
-			vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+			vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 		}
 		vkCmdEndRenderPass(commandBuffer);
 		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
@@ -739,6 +791,9 @@ private:
 			throw std::runtime_error("failed to create window surface!");
 		}
 	}
+
+
+
 	void createLogicalDevice() {
 		QueueFamilyIndices graphicsIndices = findGraphicsQueueFamilies(physicalDevice);
 		QueueFamilyIndices presentindices = findPresentQueueFamilies(physicalDevice, surface);
@@ -896,7 +951,7 @@ private:
 		result = vkQueuePresentKHR(presentQueue, &presentInfo);
 
 		// framebufferResized：驱动不保证返回 OUT_OF_DATE，用 GLFW 回调兜底。
-		// 这里同样只登记，避免拖动时每次 present 都触发一次重建
+		// 同样只登记，避免拖动时每次 present 都触发一次重建
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
 			markResizePending();
 		}
@@ -931,7 +986,8 @@ private:
 	void cleanup() {
 		// 先销毁依赖 swapchain 尺寸的资源（framebuffers / imageViews）
 		cleanupSwapChain();
-
+		vkDestroyBuffer(device, vertexBuffer, nullptr);
+		vkFreeMemory(device, vertexBufferMemory, nullptr);
 		// 三个 vector 容量已不再一致，各自按自身容量销毁
 		for (auto semaphore : renderFinishedSemaphores) {
 			vkDestroySemaphore(device, semaphore, nullptr);
@@ -1021,6 +1077,8 @@ private:
 	uint32_t currentFrame = 0;
 	bool framebufferResized = false;
 	double lastResizeTime = 0.0; // 配合 RESIZE_DEBOUNCE_SECONDS 使用
+	VkBuffer vertexBuffer;
+	VkDeviceMemory vertexBufferMemory;
 };
 
 int main() {
