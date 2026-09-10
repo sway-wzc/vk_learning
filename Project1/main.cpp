@@ -315,8 +315,6 @@ private:
 		auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
 		app->framebufferResized = true;
 		app->lastResizeTime = glfwGetTime(); // 只记录时刻，真正的重建由 drawFrame 的防抖逻辑决定
-
-		std::cout << "319 callback" << app->lastResizeTime << std::endl;
 	}
 	void initVulkan() {
 		config.collect();
