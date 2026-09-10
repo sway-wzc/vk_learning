@@ -16,11 +16,21 @@
 #include <limits> // Necessary for std::numeric_limits
 #include <algorithm> // Necessary for std::clamp
 #include <fstream>
+#include <glm/glm.hpp>
+
+struct Vertex {
+	glm::vec2 pos;
+	glm::vec3 color;
+};
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
 
 const int MAX_FRAMES_IN_FLIGHT = 2;
+
+// 窗口尺寸变化防抖：拖动边缘时尺寸每帧都在变，若每次都重建 swapchain（内含 vkDeviceWaitIdle
+// + 销毁重建整套资源）会疯狂掉帧。等尺寸稳定这么久之后再一次性重建。
+constexpr double RESIZE_DEBOUNCE_SECONDS = 0.1;
 
 const bool enableGLFW = true;
 #ifdef NDEBUG
@@ -276,6 +286,7 @@ private:
 	static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
 		auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
 		app->framebufferResized = true;
+		app->lastResizeTime = glfwGetTime(); // 只记录时刻，真正的重建由 drawFrame 的防抖逻辑决定
 	}
 	void initVulkan() {
 		config.collect();
@@ -332,7 +343,9 @@ private:
 			throw std::runtime_error("failed to allocate command buffers!");
 		}
 	}
-	void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+	// bDragging: 窗口正在被拖动/尺寸尚未稳定时为 true，只清成灰色、不绘制场景，
+	// 避免"旧尺寸内容被拉伸"的观感
+	void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex, bool bDragging) {
 		VkCommandBufferBeginInfo beginInfo{};
 		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		beginInfo.flags = 0; // Optional
@@ -347,7 +360,10 @@ private:
 		renderPassInfo.framebuffer = swapChainFramebuffers[imageIndex];
 		renderPassInfo.renderArea.offset = { 0, 0 };
 		renderPassInfo.renderArea.extent = swapChainExtent;
-		VkClearValue clearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
+		// 拖动中用灰色，正常渲染用黑色
+		VkClearValue clearColor = bDragging
+			? VkClearValue{ {{0.2f, 0.2f, 0.2f, 1.0f}} }
+			: VkClearValue{ {{0.0f, 0.0f, 0.0f, 1.0f}} };
 		renderPassInfo.clearValueCount = 1;
 		renderPassInfo.pClearValues = &clearColor;
 		vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -368,7 +384,9 @@ private:
 		scissor.extent = swapChainExtent;
 		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-		vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+		if (!bDragging) {
+			vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+		}
 		vkCmdEndRenderPass(commandBuffer);
 		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
 			throw std::runtime_error("failed to record command buffer!");
@@ -785,13 +803,26 @@ private:
 		createFramebuffers();
 		createRenderFinishedSemaphores(); // per-image semaphore 数量要匹配新的 image 数
 	}
+	// 尺寸变化只登记时刻，不立刻重建；真正的重建时机由 drawFrame 开头的防抖逻辑统一决定
+	void markResizePending() {
+		framebufferResized = true;
+		lastResizeTime = glfwGetTime();
+	}
+
 	void drawFrame() {
+		// 防抖：拖动边缘时尺寸每帧都变，这个条件会一直不满足，于是一次都不重建；
+		// 松手（或点最大化）后尺寸稳定，达到阈值时一次性重建
+		if (framebufferResized && glfwGetTime() - lastResizeTime >= RESIZE_DEBOUNCE_SECONDS) {
+			recreateSwapChain();
+			framebufferResized = false;
+		}
+
 		vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 		
 		uint32_t imageIndex;
 		VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-			recreateSwapChain();
+			markResizePending(); // 拖动时每帧都会走到这里，此处重建会把帧率拖垮
 			return;
 		}
 		else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
@@ -799,7 +830,8 @@ private:
 		}
 		vkResetFences(device, 1, &inFlightFences[currentFrame]);
 		vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-		recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+		// 尺寸未稳定（拖动中）时只清灰屏，不绘制三角形
+		recordCommandBuffer(commandBuffers[currentFrame], imageIndex, framebufferResized);
 
 		VkSubmitInfo submitInfo{};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -830,9 +862,10 @@ private:
 
 		result = vkQueuePresentKHR(presentQueue, &presentInfo);
 
+		// framebufferResized：驱动不保证返回 OUT_OF_DATE，用 GLFW 回调兜底。
+		// 这里同样只登记，避免拖动时每次 present 都触发一次重建
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
-			framebufferResized = false;
-			recreateSwapChain();
+			markResizePending();
 		}
 		else if (result != VK_SUCCESS) {
 			throw std::runtime_error("failed to present swap chain image!");
@@ -954,6 +987,7 @@ private:
 	std::vector<VkFence> inFlightFences;
 	uint32_t currentFrame = 0;
 	bool framebufferResized = false;
+	double lastResizeTime = 0.0; // 配合 RESIZE_DEBOUNCE_SECONDS 使用
 };
 
 int main() {
