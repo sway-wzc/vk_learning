@@ -316,13 +316,7 @@ private:
 		app->framebufferResized = true;
 		app->lastResizeTime = glfwGetTime(); // 只记录时刻，真正的重建由 drawFrame 的防抖逻辑决定
 
-		// ↓↓↓ 临时验证用，看完删掉 ↓↓↓
-		static double prevTime = 0.0;
-		static int idx = 0;
-		double now = glfwGetTime();
-		std::cout << "[" << idx++ << "] " << width << "x" << height
-			<< "   dt=" << (now - prevTime) * 1000.0 << "ms\n";
-		prevTime = now;
+		std::cout << "319 callback" << app->lastResizeTime << std::endl;
 	}
 	void initVulkan() {
 		config.collect();
@@ -891,11 +885,6 @@ private:
 		createFramebuffers();
 		createRenderFinishedSemaphores(); // per-image semaphore 数量要匹配新的 image 数
 	}
-	// 尺寸变化只登记时刻，不立刻重建；真正的重建时机由 drawFrame 开头的防抖逻辑统一决定
-	void markResizePending() {
-		framebufferResized = true;
-		lastResizeTime = glfwGetTime();
-	}
 
 	void drawFrame() {
 		// 防抖：拖动边缘时尺寸每帧都变，这个条件会一直不满足，于是一次都不重建；
@@ -910,7 +899,7 @@ private:
 		uint32_t imageIndex;
 		VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-			markResizePending(); // 拖动时每帧都会走到这里，此处重建会把帧率拖垮
+			framebufferResized = true;
 			return;
 		}
 		else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
@@ -953,7 +942,7 @@ private:
 		// framebufferResized：驱动不保证返回 OUT_OF_DATE，用 GLFW 回调兜底。
 		// 同样只登记，避免拖动时每次 present 都触发一次重建
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
-			markResizePending();
+			framebufferResized = true;
 		}
 		else if (result != VK_SUCCESS) {
 			throw std::runtime_error("failed to present swap chain image!");
