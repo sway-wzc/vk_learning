@@ -167,4 +167,27 @@
     </PropertyGroup>
     <Error Condition="!Exists('..\packages\glfw.3.4.0\build\native\glfw.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\glfw.3.4.0\build\native\glfw.targets'))" />
   </Target>
+
+  <!-- ============================================================
+       构建后把运行时资源拷到 exe 同目录。
+       原因：代码里用的是相对路径（shader/xxx.spv、textures/xxx.jpg），
+       而双击启动时工作目录 = exe 所在目录，不是工程目录。
+       把资源跟着 exe 一起拷过去，双击运行才不会 "failed to open file!"。
+       ============================================================ -->
+  <ItemGroup>
+    <!-- 只拷编译产物 .spv，不拷 .vert/.frag/.bat 源文件 -->
+    <RuntimeShader Include="shader\**\*.spv" />
+    <RuntimeTexture Include="textures\**\*.*" />
+  </ItemGroup>
+
+  <Target Name="CopyRuntimeResources" AfterTargets="Build">
+    <!-- SkipUnchangedFiles：没变动的文件不重复拷，避免每次构建都刷磁盘时间戳 -->
+    <Copy SourceFiles="@(RuntimeShader)"
+          DestinationFolder="$(OutDir)shader\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RuntimeTexture)"
+          DestinationFolder="$(OutDir)textures\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+    <Message Text="[CopyRuntimeResources] 资源已同步到 $(OutDir)" Importance="high" />
+  </Target>
 </Project>
